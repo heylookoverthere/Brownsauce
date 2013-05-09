@@ -1,0 +1,674 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+  <head>
+    <title>Ogre Battle!</title>
+    <link href="/stylesheets/screen.css" media="all" rel="stylesheet" type="text/css"/>
+    <script language="javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js" type="text/javascript"></script><script language="javascript" src="javascripts/jquery.hotkeys.js" type="text/javascript"></script><script language="javascript" src="javascripts/key_status.js" type="text/javascript"></script><script language="javascript" src="javascripts/util.js" type="text/javascript"></script><script language="javascript" src="javascripts/sprite.js" type="text/javascript"></script><script language="javascript" src="javascripts/sound.js" type="text/javascript"></script>
+  </head>
+  <body>
+	<audio id="myAudio" preload="auto">
+    <source src="songu.mp3" type="audio/mpeg" />
+	Your browser does not support the audio element.
+   	</audio>
+		
+	<audio id="jump" preload="auto">
+    <source src="sounds/jump.wav" type="audio/wav" />
+    </audio>
+	
+    <h1>Hit H for controls. </h1>
+
+	    <script type='text/javascript' src="graph.js"></script>
+	    <script type='text/javascript' src="astar.js"></script>
+		<script type='text/javascript'>
+      //<![CDATA[
+
+$(document).bind("contextmenu",function(e){
+	return false;
+    }); 
+
+var textPause=false;
+var textText="";
+var CANVAS_WIDTH = 900;
+var CANVAS_HEIGHT = 640;
+var MAP_WIDTH = 120;
+var MAP_HEIGHT = 80;
+var FPS = 30;
+var LAVA_RATE=2000;
+var WATER_RATE=1000;
+var BURN_RATE=100;
+var CHARANI_RATE= 200;
+var FALL_DMG=900;
+var SPAWN_X=22;
+var SPAWN_Y=19;
+var GRAVITY_RATE=5;
+//var keychart = ["w","a","d","s","up","right","down","left","m","n","shift"];
+
+var darkgrasssprite = Sprite("darkgrass"); //begin loading images.  Eventually I should put them all on one .png file
+var grasssprite = Sprite("grass");
+var watersprite = Sprite("water");
+var stonesprite = Sprite("stone");
+var mossysprite = Sprite("mossy");
+var explosionsprite=new Array(4);
+explosionsprite[0] =Sprite("explosion0");
+explosionsprite[1] =Sprite("explosion1");
+explosionsprite[2] =Sprite("explosion2");
+explosionsprite[3] =Sprite("explosion3");
+
+
+
+var canvasElement = $("<canvas width='" + CANVAS_WIDTH + 
+		      "' height='" + CANVAS_HEIGHT + "'></canvas");
+var canvas = canvasElement.get(0).getContext("2d");
+canvasElement.appendTo('body');
+//todo:  find some way to put this in map or tile?
+var tileani=0;
+var anicount=0;
+var anirate=1000;
+var lastani=0;
+var gotall=false;
+var numsounds=0;
+var soundsplaying ="";
+var timestamp = new Date(); 
+var milliseconds = timestamp.getTime();
+var lasttime=0;
+
+spawners= [];
+enemies = [];
+
+function playSound(name){
+    
+    nerp=document.getElementById(name);
+    if(nerp.ended == true || nerp.currentTime == 0){
+	nerp.play()
+	    numsounds++;
+    }
+    
+};
+
+function akey(k) {  //represents a keyboard button
+    k = k || "space";
+    this.key =k;
+    this.aflag=false;
+	this.dflag=false;
+    this.check= function(){
+	if (keydown[this.key]) { 
+	    this.aflag=true;
+	    return false;
+	}
+	if((!keydown[this.key]) && (this.aflag==true)){
+	    this.aflag=false;
+	    return true;
+	}
+    };
+	this.checkDown= function(){
+	if ((keydown[this.key] )  && (!this.dflag)) { 
+	    this.dflag=true;
+	    return true;
+	}
+	if(!keydown[this.key]){
+	    this.dflag=false;
+	    return false;
+	}
+    };
+    return this;
+}
+
+function unit()
+{
+	this.hp=40;
+	this.mp=0;
+	this.maxhp=40;
+	this.maxmp=40;
+	this.speed=1;
+	this.luck=5;
+	this.ali=50;
+	this.class=0;
+	this.viewrange=5;
+	this.exp=0;
+	this.level=1;
+	this.def=1;
+	this.mdef=1;
+	this.attack=1;
+    this.atb=0;
+	this.canlead = true;
+	this.sprite = Sprite("bear1");
+	this.cost = 10;
+	this.gambits = null;
+	this.update = function (){
+		if (this.atb>99) {
+			//gambits, attack
+			this.atb=0;
+		}
+		this.atb++;
+	};
+	
+}
+
+function squad() {
+	//list of units
+	//list of items
+	//list of blokemon
+	//leader
+	//AI 
+	//target
+	//waypoints?
+	this.x = 0;
+	this.y = 0;
+	this.leader = new unit();
+	this.bx = 8;
+	this.by = 8;
+	this.team=0;
+	this.sprite = this.leader.sprite;
+	this.path = null;
+	this.nextMove = null;
+	this.nextTile = {x: this.x, y: this.y};
+	this.inNextTile = false;
+	this.draw = function(cam) {
+		  //this.sprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+		  this.sprite.draw(canvas, (this.x * 16 + (this.bx - 8) - cam.x * 16), (this.y * 16 + (this.by - 8) - cam.y * 16));
+        };
+	this.update = function(map) {
+	
+       if( !this.nextMove ) {
+	     this.updateNextMove();
+	   }
+	   if( !this.nextMove ) {
+	     return;
+	   }
+	   var terrain = map.tiles[this.nextTile.x][this.nextTile.y].data;
+	   var speed = (terrain == 4 ? 2 : 4);
+	   if( this.nextMove.x > this.x ) {
+	     this.bx += speed;
+	   } else if( this.nextMove.x < this.x ) {
+	     this.bx -= speed;
+	   }
+	   if( this.nextMove.y > this.y ) {
+	     this.by += speed;
+	   } else if( this.nextMove.y < this.y ) {
+	     this.by -= speed;
+	   }
+	   if( !this.inNextTile && ( this.bx == 0 || this.bx == 16 || this.by == 0 || this.by == 16 )) {
+	   	 this.nextTile = {};
+		 this.nextTile.x = this.nextMove.x;
+		 this.nextTile.y = this.nextMove.y;
+//		 if( this.bx == 0 ) { this.bx = 16 } else if( this.bx == 16 ) { this.bx = 0; } 
+//		 if( this.by == 0 ) { this.by = 16 } else if( this.by == 16 ) { this.by = 0; }		
+		 this.inNextTile = true;
+	   }
+	   if(( this.bx == 24 || this.bx == -8 ) || ( this.by == -8 || this.by == 24 )) {
+		 this.bx = this.by = 8;
+		 this.inNextTile = false;
+		 this.x = this.nextMove.x;
+		 this.y = this.nextMove.y;
+	  	 this.nextTile = {x: this.x, y: this.y};
+		 
+		 this.nextMove = null;
+
+	   }
+	}
+	this.updateNextMove = function() {
+	  if( !this.path ) {
+	    return;
+	  }
+	  this.nextMove = this.path.shift();
+	  if( !this.nextMove ) {
+	    this.path = null; return;
+	  }
+	};
+	this.isWalking = function() {
+	  return this.path != null;
+	};
+	this.setDestination = function(x, y, map) {
+	  this.path = map.getPath(this.x, this.y, x, y);
+	};
+}
+
+
+function textbox(msg) {  //draws a text box
+    canvas.save();
+    canvas.globalAlpha=0.80;
+    canvas.fillStyle = "#DCDCDC";
+    canvas.fillRect(30,400,840,210);
+    
+    canvas.fillStyle = "#483D8B ";
+    canvas.fillRect(40,410,820,190);
+    
+    canvas.font = "16pt Calibri";
+    canvas.textAlign = "left";
+    canvas.textBaseline = "middle";
+    canvas.fillStyle = "white";
+    canvas.fillText(msg, 60,410+15);
+    
+    canvas.restore();
+};
+		
+function drawmousetext(targ,cam) { //draws unit status info
+    canvas.font = "14pt Calibri";
+    canvas.textAlign = "center";
+    canvas.textBaseline = "middle";
+    canvas.fillStyle = "yellow";
+    tempstr = targ.name+": "+targ.hp+ " / " +targ.maxhp;
+    canvas.fillText(tempstr, (targ.x-cam.x)*16+(targ.width/2), (targ.y-cam.y)*16+targ.height+8);
+    
+    canvas.fillStyle = "#5F9EA0";
+};
+
+function mouseClick(e) {  //represents the mouse
+
+	  e.preventDefault();    
+  	  mX = e.pageX - canvasElement.get(0).offsetLeft;
+	  mY = e.pageY - canvasElement.get(0).offsetTop;	
+
+      tx=Math.floor(mX/16);
+	  ty=Math.floor(mY/16);
+	  console.log(mX,mY);
+	  if( squid[1].path ) { squid[1].path = null; return; }
+	  squid[1].setDestination(tx,ty,maps[0]); 
+
+};
+
+
+document.body.addEventListener("click", mouseClick, false);
+
+var ksavekey=new akey("o"); //define the different keys
+var loadkey=new akey("l");
+
+randomwalk=false;
+
+var serversavekey=new akey("i");
+var serverloadkey=new akey("k");
+var upkey=new akey("up");
+var rightkey=new akey("right");
+var downkey=new akey("down");
+var leftkey=new akey("left");
+
+
+
+var camera = {  //represents the camera, aka what part of the map is on screen
+    x: 0,
+    y: 0,
+    width: 60,
+    height: 40,
+	zoom: 1,
+    center: function(targ) {
+	tx=targ.x-26;
+	ty=targ.y-20;
+	if (tx<0) {tx=0;}
+	if (ty<0) {ty=0;}
+	if (tx>MAP_WIDTH-this.width) {tx=MAP_WIDTH-this.width;}
+	if (ty>MAP_HEIGHT-this.height) {ty=MAP_HEIGHT-this.height;}
+	
+	this.x=tx;
+	this.y=ty;
+    },
+    check: function() {
+	this.x.clamp(0, MAP_WIDTH-60);
+	this.y.clamp(0, MAP_HEIGHT-40);
+    },
+    rX: function(fx) {
+	return fx-this.x;
+    },
+    rY: function(fy) {
+	return fy-this.y;
+    }
+};
+
+
+
+
+var bColors = ["#008000","#006400", "#FF4500", "#000080", "#696969", "#800080", "#808000", "#A52A2A", "#8B4513", "#FFDEAD", "#FFFF40","#000080" , "#FFFF80"]; //list of colors for radar/a few other things
+
+function makeNewTile() { //the Map is made of a 2D array of tiles.
+    var tile = {
+	width: 16,
+	height: 16,
+	x: 0,
+	y: 0,
+	
+	ani:0,
+	color: "#FFC020",
+	data: 0,
+	draw: function(cam) { 
+	    if(this.data==0){
+		grasssprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    }else if(this.data==1){
+		stonesprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    }else if(this.data==2){
+		mudsprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    }else if(this.data==3){
+		crystalsprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16); 
+	    }else if(this.data==4){
+		mossysprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    }else if(this.data==5){
+		stonebricksprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    }else if(this.data==6){
+		plankssprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    
+	    }else if(this.data==42){
+		watersprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    }else{  //if strange data, draw a solid color
+		canvas.fillStyle = bColors[0]; 
+		canvas.fillRect((this.x-cam.x)*this.width, (this.y-cam.y)*this.height, this.width, this.height);
+	    }
+	    if(this.cracked==1){
+		crackedsprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    }
+		if(this.platform==1){
+		platformsprite.draw(canvas, (this.x-cam.x)*16, (this.y-cam.y)*16);
+	    }
+            
+	}
+    };
+    
+    return tile;
+};
+
+function tileToCost(data, squad) {
+  if( data == 1 ) return 0;
+  if( data == 4 ) return 4;
+  return 1;
+};
+
+function mapToGraph(map, squad) { 
+  var tilesArray = [];
+  for( var i=0; i<MAP_WIDTH; ++i ) {
+    var rowArray = [];
+    for( var j=0; j<MAP_HEIGHT; ++j ) {
+	  var tile = map.tiles[i][j];
+	  var data = tileToCost(tile.data, squad);
+	  for( var ii=-1; ii<2; ++ii ) {
+	    for( var jj=-1; jj<2; ++jj) {
+		  if( i+ii < 0 || i+ii >= MAP_WIDTH || j+jj < 0 || j+jj >= MAP_WIDTH ) {
+		    continue;
+		  }
+		  var adjTile = map.tiles[i+ii][j+jj];
+		  if( !adjTile ) continue;
+		  adjData = tileToCost(adjTile.data);
+		  if( data == 0 || adjData == 0 ) { data = 0; } else {
+  		    data = Math.max(data, adjData);
+	      }
+		}
+	  }
+	  rowArray.push(data);
+    }
+    tilesArray.push(rowArray);
+  }
+  return new Graph(tilesArray);
+}
+
+
+function Map(I) { //map object
+    I = I || {};
+    var i = 0;
+    var j = 0;
+    I.active = true;
+    I.color = "#00A";
+    I.tiles = new Array(MAP_WIDTH);
+    for( i=0; i<MAP_WIDTH; i++ ) { I.tiles[i] = new Array(MAP_HEIGHT);  }
+    for (i=0;i<MAP_WIDTH; i++){
+	for (j=0;j<MAP_HEIGHT; j++){
+	    I.tiles[i][j]= makeNewTile();
+	    I.tiles[i][j].x=i;
+	    I.tiles[i][j].y=j;
+	}
+    }
+    I.width = MAP_WIDTH;
+    I.height = MAP_HEIGHT;
+
+	I.getPath = function(startX, startY, endX, endY) {
+      var graph = mapToGraph(I);
+	  return astar.search(graph.nodes, graph.nodes[startX][startY], graph.nodes[endX][endY]);
+    };
+ 
+ I.drawPath = function(x,y,xx,yy) {
+   var path = I.getPath(x, y, xx, yy);
+   for( var i=0; i<path.length; ++i ) {
+     I.setTile(path[i].x, path[i].y, 1);
+   }
+ };
+    I.zoom = 1;
+    I.draw = function(cam) {
+	cam.check();
+	for (i=cam.x;i<cam.x+cam.width; i+=I.zoom){
+	    for (j=cam.y;j<cam.y+cam.height; j+=I.zoom){
+		    var tileTypes = {};
+			for( var ii=0; ii<I.zoom; ii+=1 ) {
+			  for( var jj=0; jj<I.zoom; jj+=1 ) {
+			    var data = I.tiles[i+ii][j+jj];
+				if( data ) {
+				  if( !tileTypes[data.data] ) { tileTypes[data.data] = 1; }
+				  else{ tileTypes[data.data] += 1; }
+				}
+			  }
+			}
+			var dominantType = {type: null, occurs: 0};
+			for( var type in tileTypes ) {
+			  if( tileTypes[type] && tileTypes[type] > dominantType.occurs ) {
+			    dominantType.occurs = tileTypes[type];
+				dominantType.type = type;
+			  }
+			}
+			if(dominantType.type && dominantType.type <41) {
+				//I.tiles[i][j].draw(cam);
+				if(dominantType.type==0){
+				grasssprite.draw(canvas, (i-cam.x)*16/Math.pow(2,I.zoom-1), (j-cam.y)*16/Math.pow(2,I.zoom-1));
+				}else if(dominantType.type==1){
+				stonesprite.draw(canvas, (i-cam.x)*16/Math.pow(2,I.zoom-1), (j-cam.y)*16/Math.pow(2,I.zoom-1));
+				}else if(dominantType.type==2){
+				mudsprite.draw(canvas, (i-cam.x)*16/Math.pow(2,I.zoom-1), (j-cam.y)*16/Math.pow(2,I.zoom-1));
+				}else if(dominantType.type==3){
+				crystalsprite.draw(canvas, (i-cam.x)*16/Math.pow(2,I.zoom-1), (j-cam.y)*16/Math.pow(2,I.zoom-1)); 
+				}else if(dominantType.type==4){
+				mossysprite.draw(canvas, (i-cam.x)*16/Math.pow(2,I.zoom-1), (j-cam.y)*16/Math.pow(2,I.zoom-1));
+				}else{  //if strange data, draw a solid color
+				canvas.fillStyle = bColors[0]; 
+				canvas.fillRect((this.x-cam.x)*this.width, (this.y-cam.y)*this.height, this.width, this.height);
+				}	
+			}
+		}
+		}
+    };
+    I.clear =function(){
+	for (i=0;i<MAP_WIDTH; i++){
+	    for (j=0;j<MAP_HEIGHT; j++){
+		I.tiles[i][j]= makeNewTile();
+		I.tiles[i][j].x=i;
+		I.tiles[i][j].y=j;
+	    }
+	}
+    };
+   
+	
+    I.setTile = function (x,y,data) {
+	I.tiles[x][y].data = data;
+    };
+	
+    return I;
+}
+
+maps = [];
+maps.push(Map());
+
+
+maps[0].clear();
+maps[0].setTile(24,24,1);
+maps[0].setTile(23,24,1);
+maps[0].setTile(22,24,1);
+maps[0].setTile(24,25,1);
+maps[0].setTile(23,25,1);
+maps[0].setTile(22,25,1);
+maps[0].setTile(24,26,1);
+maps[0].setTile(23,26,1);
+maps[0].setTile(22,26,1);
+
+maps[0].setTile(27,24,1);
+maps[0].setTile(26,24,1);
+maps[0].setTile(25,24,1);
+maps[0].setTile(27,25,1);
+maps[0].setTile(26,25,1);
+maps[0].setTile(25,25,1);
+maps[0].setTile(27,26,1);
+maps[0].setTile(26,26,1);
+maps[0].setTile(25,26,1);
+
+maps[0].setTile(28,24,1);
+maps[0].setTile(29,24,1);
+maps[0].setTile(30,24,1);
+maps[0].setTile(28,25,1);
+maps[0].setTile(29,25,1);
+maps[0].setTile(30,25,1);
+maps[0].setTile(28,26,1);
+maps[0].setTile(29,26,1);
+maps[0].setTile(30,26,1);
+
+for (var p=0;p<300;p++)
+{
+	var i=Math.floor(Math.random()*115);
+	var k=Math.floor(Math.random()*76);
+	maps[0].setTile(24,24,1);
+	maps[0].setTile(i,k,1);
+	maps[0].setTile(i+1,k+1,1);
+    maps[0].setTile(i+1,k,1);
+	maps[0].setTile(i,k+1,1);
+	//maps[0].setTile(i+1,k+2,1);
+	//maps[0].setTile(i+2,k+2,1);
+
+	//maps[0].setTile(i+2,k+1,1);
+	//maps[0].setTile(2+i,k,1);
+	//maps[0].setTile(i,k+2,1);
+	maps[0].setTile(i+1,k+1,1);
+
+  
+}
+
+
+/*for (var p=0;p<10;p++)
+{
+	var i=Math.floor(Math.random()*80);
+	var k=Math.floor(Math.random()*70);
+	maps[0].setTile(24,24,4);
+	maps[0].setTile(i,k,4);
+	maps[0].setTile(i+1,k+1,4);
+	maps[0].setTile(i+2,k+2,4);
+    maps[0].setTile(i+1,k,4);
+	maps[0].setTile(i,k+1,4);
+	maps[0].setTile(i+1,k+2,4);
+	maps[0].setTile(i+2,k+1,4);
+	maps[0].setTile(2+i,k,4);
+	maps[0].setTile(i,k+2,4);
+	maps[0].setTile(i+1,k+1,4);
+
+  
+}*/
+for(var i=0;i<15;i++){
+	//maps[0].setTile(20+i,20,1);
+	//maps[0].setTile(20+i,50,1);
+	//maps[0].setTile(20,20+i,1);
+	}
+	
+for(var i=0;i<15;i++){
+	for(var k=0;k<70;k++)
+	{
+	maps[0].setTile(20+i,0+k,4);
+	maps[0].setTile(20+i,0+k,4);
+	maps[0].setTile(20+i,0+k,4);
+	}
+	}
+var squid= new Array(12);
+squid[0]=new squad();
+squid[1]=new squad();
+squid[2]=new squad();
+squid[3]=new squad();
+squid[4]=new squad();
+squid[5]=new squad();
+squid[6]=new squad();
+squid[7]=new squad();
+squid[8]=new squad();
+squid[9]=new squad();
+squid[10]=new squad();
+squid[11]=new squad();
+
+var frogs= new Array(12);
+frogs[0]=new squad();
+frogs[1]=new squad();
+frogs[2]=new squad();
+frogs[3]=new squad();
+frogs[4]=new squad();
+frogs[5]=new squad();
+frogs[6]=new squad();
+frogs[7]=new squad();
+frogs[8]=new squad();
+frogs[9]=new squad();
+frogs[10]=new squad();
+frogs[11]=new squad();
+for (var i=0;i<12;i++){
+	frogs[i].sprite=Sprite("frogman1");
+	frogs[i].team=1;
+	frogs[i].leader.class=1;
+	frogs[i].x=100;
+	frogs[i].y=70;
+}
+setInterval(function() {
+	update();
+    }, 1000/FPS);
+
+
+		
+document.getElementById("myAudio").addEventListener('ended', function() { //loops music
+	this.currentTime = 0;
+	this.play();
+    }, false);
+
+document.getElementById("myAudio").play(); //starts music
+
+
+//------------MAIN LOOP-----------------------------------------
+function update() {
+    lasttime=milliseconds;
+    timestamp = new Date();
+    milliseconds = timestamp.getTime();
+	maps[0].draw(camera);
+	for (var i=0;i<12;i++) {
+		squid[i].draw(camera);
+		squid[i].update(maps[0]);
+		if( (!squid[i].path) && (randomwalk) && i != 1 ) {
+      		squid[i].setDestination(Math.floor(Math.random()*70),Math.floor(Math.random()*70),maps[0]); };
+		frogs[i].draw(camera);
+		frogs[i].update(maps[0]);
+		if( (!frogs[i].path) && (randomwalk) ){//&& i != 1 ) {
+      		frogs[i].setDestination(Math.floor(Math.random()*70),Math.floor(Math.random()*70),maps[0]); };
+	}
+	
+	//camera controlls
+    if(keydown.left) {
+	camera.x -= 1;
+	if (camera.x<0) {camera.x=0;}
+    }
+    
+    if(keydown.right) {
+	camera.x += 1;
+	if (camera.x>(MAP_WIDTH-camera.width)) {camera.x=MAP_WIDTH-camera.width;}
+    }
+    
+    if(keydown.up) {
+	camera.y -= 1;
+	if (camera.y<0) {camera.y=0;}
+    }
+    
+    if(keydown.down) {
+	camera.y += 1;
+	if (camera.y>(MAP_HEIGHT-camera.height)) {camera.y=MAP_HEIGHT-camera.height;}
+	}
+	if (ksavekey.check()) {randomwalk=!randomwalk;}
+
+    //if(Mouse.clicked)
+    
+}
+
+
+      //]]>
+    </script>
+
+  </body>
+</html>
+
